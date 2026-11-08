@@ -14,6 +14,11 @@
 3. 게임 폴더에 `Content (unpacked)` 폴더가 생깁니다. 그 안의 `Maps` 폴더를 씁니다.
    - 예: `...\Stardew Valley\Content (unpacked)\Maps\spring_town.png`
 
+**간단한 대안: Stardew Sim 저장소의 PNG 쓰기**
+[Waifuhtr/Stardew-valley-mcp](https://github.com/Waifuhtr/Stardew-valley-mcp) 저장소에 이미 PNG로 풀린 타일시트가 들어 있습니다.
+GitHub에서 **Code > Download ZIP** 으로 받아 풀고, 도우미 창에서 `web\data\img\Maps\spring_town.png` 를 고르면 됩니다.
+(안드로이드판 1.6.15에서 뽑은 그림이지만 PC판과 그림은 같습니다. 개인 참고용으로만 쓰세요.)
+
 ## 2. 설치
 
 1. `stardew-pixel-helper.aseprite-extension` 파일을 더블클릭하거나,
