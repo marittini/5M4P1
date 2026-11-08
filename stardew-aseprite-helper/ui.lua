@@ -17,7 +17,8 @@ function U.open(env)
     local dir = mapsDir()
     if not dir then
       app.alert{ title = "Stardew 도우미", text = { "먼저 스타듀 게임 파일 위치를 지정해 주세요.",
-        "(Content (unpacked) > Maps 폴더 안의 spring_town.png 선택)" } }
+        "'미리보기 / 설정' 탭에서 Maps 폴더 안의 spring_town.png 를 고르면 됩니다.",
+        "(Content (unpacked)\\Maps 또는 Stardew Sim 의 web\\data\\img\\Maps)" } }
       return nil
     end
     local path = app.fs.joinPath(dir, name .. ".png")
@@ -85,6 +86,29 @@ function U.open(env)
     return out
   end
 
+  -- 보정으로 새로 생긴 색을 팔레트 끝에 추가
+  local function addImageColorsToPalette(spr, img)
+    local pal = spr.palettes[1]
+    local have = {}
+    for i = 0, #pal - 1 do local c = pal:getColor(i); have[core.key(c.red, c.green, c.blue)] = true end
+    local new = {}
+    for y = 0, img.height - 1 do
+      for x = 0, img.width - 1 do
+        local v = img:getPixel(x, y)
+        if pc.rgbaA(v) > 0 then
+          local r, g, b = pc.rgbaR(v), pc.rgbaG(v), pc.rgbaB(v)
+          local k = core.key(r, g, b)
+          if not have[k] then have[k] = true; new[#new + 1] = Color{ r = r, g = g, b = b, a = 255 } end
+        end
+      end
+    end
+    if #new == 0 or #pal + #new > 256 then return end
+    local np = Palette(#pal + #new)
+    for i = 0, #pal - 1 do np:setColor(i, pal:getColor(i)) end
+    for i, c in ipairs(new) do np:setColor(#pal + i - 1, c) end
+    spr:setPalette(np)
+  end
+
   -- 현재 셀 이미지에 작업 적용 (되돌리기 한 번으로 취소 가능)
   local function withCel(title, fn)
     local spr, cel = app.activeSprite, app.activeCel
@@ -116,23 +140,36 @@ function U.open(env)
   -- ------------------------------------------------------------ 대화창
   local dlg = Dialog{ title = "Stardew 도트 도우미" }
 
-  dlg:separator{ text = "1. 스타듀 게임 파일" }
-  dlg:file{ id = "town", label = "spring_town.png", open = true, filetypes = { "png" },
-    filename = mapsDir() and app.fs.joinPath(mapsDir(), "spring_town.png") or "",
-    onchange = function()
-      local f = dlg.data.town
-      if f and f ~= "" then
-        prefs.mapsDir = app.fs.filePath(f)
-        sheetCache = {}
-        dlg:modify{ id = "status", text = "Maps 폴더: " .. prefs.mapsDir }
-      end
-    end }
-  dlg:label{ id = "status", text = mapsDir() and ("Maps 폴더: " .. mapsDir()) or "아직 지정 안 됨" }
+  local function shortPath(p)
+    if #p > 48 then return "..." .. p:sub(-45) end
+    return p
+  end
+  local function splitNote(t)
+    t = t or ""
+    if #t < 60 then return t, "" end
+    local mid, best = #t // 2, nil
+    for i = 1, #t do
+      if t:sub(i, i) == " " and (not best or math.abs(i - mid) < math.abs(best - mid)) then best = i end
+    end
+    if not best then return t, "" end
+    return t:sub(1, best - 1), t:sub(best + 1)
+  end
+  local hasTabs = false
+  pcall(function() hasTabs = dlg.tab ~= nil end)
+  local function tab(id, text) if hasTabs then dlg:tab{ id = id, text = text } end end
+  local function endtabs() if hasTabs then dlg:endtabs{ id = "tabs", selected = "t_mat" } end end
 
-  dlg:separator{ text = "2. 바닐라 재질 도감" }
+  tab("t_mat", "재질 도감")
+  dlg:separator{ text = "바닐라 재질 도감" }
   dlg:combobox{ id = "mat", label = "재질", option = names[1], options = names,
-    onchange = function() dlg:modify{ id = "note", text = material(dlg.data.mat).note or "" } end }
-  dlg:label{ id = "note", text = catalog[1].note or "" }
+    onchange = function()
+      local a, b = splitNote(material(dlg.data.mat).note)
+      dlg:modify{ id = "note", text = a }; dlg:modify{ id = "note2", text = b }
+    end }
+  local n1, n2 = splitNote(catalog[1].note)
+  dlg:label{ id = "note", text = n1 }
+  dlg:newrow()
+  dlg:label{ id = "note2", text = n2 }
   dlg:button{ text = "레퍼런스 열기", onclick = function()
     local m = material(dlg.data.mat)
     local img = loadSheet(m.sheet); if not img then return end
@@ -140,8 +177,11 @@ function U.open(env)
     local spr = Sprite(crop.width, crop.height, ColorMode.RGB)
     spr:newCel(spr.layers[1], spr.frames[1], crop, Point(0, 0))
     spr.layers[1].name = m.name
+    pcall(function() spr.filename = m.name end)
     spr.gridBounds = Rectangle(0, 0, 16, 16)
     setSpritePalette(core.colorsInRect(crop, pc, 0, 0, crop.width, crop.height, 1), false)
+    pcall(function() app.command.FitScreen() end)
+    pcall(function() app.command.ShowGrid() end)
   end }
   dlg:button{ text = "팔레트로 적용", onclick = function()
     local cols = materialColors(material(dlg.data.mat)); if cols then setSpritePalette(cols, false) end
@@ -165,7 +205,8 @@ function U.open(env)
     setSpritePalette(all, false)
   end }
 
-  dlg:separator{ text = "3. 검사 (현재 팔레트 기준)" }
+  tab("t_fix", "검사 / 보정")
+  dlg:separator{ text = "검사 (현재 팔레트 기준)" }
   dlg:check{ id = "marks", text = "문제 위치 표시 레이어 만들기", selected = true }
   dlg:button{ text = "검사하기", onclick = function()
     local spr, cel = app.activeSprite, app.activeCel
@@ -180,12 +221,14 @@ function U.open(env)
                        stray = pc.rgba(255, 220, 0, 255), asym = pc.rgba(0, 220, 255, 255) }
       local mk = Image(cel.image.width, cel.image.height, ColorMode.RGB)
       for _, m in ipairs(res.marks) do mk:drawPixel(m[1], m[2], colors[m[3]]) end
+      local orig = app.activeLayer
       app.transaction("검사 표시", function()
         local layer = spr:newLayer()
         layer.name = "검사 표시 (지워도 됨)"
         layer.opacity = 170
         spr:newCel(layer, app.activeFrame, mk, cel.position)
       end)
+      app.activeLayer = orig  -- 보정 버튼이 표시 레이어가 아니라 원래 레이어에 적용되도록
       app.refresh()
     end
     app.alert{ title = "검사 결과", text = {
@@ -196,7 +239,7 @@ function U.open(env)
       "좌우 비대칭 픽셀: " .. res.asym .. "  (하늘색 표시, 대칭 건물일 때만 참고)" } }
   end }
 
-  dlg:separator{ text = "4. 보정 (선택 영역이 있으면 그 안만)" }
+  dlg:separator{ text = "보정 (선택 영역이 있으면 그 안만)" }
   dlg:button{ text = "팔레트 색으로 맞추기", onclick = function()
     local spr = app.activeSprite; if not spr then return end
     local pal = spritePaletteColors(spr)
@@ -205,7 +248,9 @@ function U.open(env)
     if n then app.tip("바뀐 픽셀: " .. n) end
   end }
   dlg:button{ text = "검은 외곽선 → 재질색", onclick = function()
-    local n = withCel("외곽선 색 정리", function(ctx) return core.selout(ctx) end)
+    local n = withCel("외곽선 색 정리", function(ctx, spr)
+      local c = core.selout(ctx); addImageColorsToPalette(spr, ctx.img); return c
+    end)
     if n then app.tip("바뀐 외곽선 픽셀: " .. n) end
   end }
   dlg:newrow()
@@ -227,12 +272,15 @@ function U.open(env)
     local cols = materialColors(material(dlg.data.mat), 2); if not cols then return end
     local ramp = core.ramp(cols, 5)
     local n = withCel("벽돌 깔기", function(ctx)
-      return core.brick(ctx, ramp, math.max(2, dlg.data.courseH), math.max(3, dlg.data.brickW))
+      local c = core.brick(ctx, ramp, math.max(2, dlg.data.courseH), math.max(3, dlg.data.brickW))
+      addImageColorsToPalette(app.activeSprite, ctx.img)
+      return c
     end)
     if n then app.tip("벽돌 픽셀: " .. n) end
   end }
 
-  dlg:separator{ text = "5. 미리보기" }
+  tab("t_etc", "미리보기 / 설정")
+  dlg:separator{ text = "미리보기" }
   dlg:button{ text = "바닐라 건물 옆에 놓고 보기", onclick = function()
     local spr = app.activeSprite
     if not spr then app.alert("열린 그림이 없어요."); return end
@@ -251,11 +299,27 @@ function U.open(env)
     local pv = Sprite(W, H, ColorMode.RGB)
     pv:newCel(pv.layers[1], pv.frames[1], canvas, Point(0, 0))
     pv.layers[1].name = "미리보기 (왼쪽: 바닐라 살롱)"
+    pcall(function() pv.filename = "미리보기" end)
+    pcall(function() app.command.FitScreen() end)
   end }
 
+  dlg:separator{ text = "스타듀 게임 파일 (Maps 폴더)" }
+  dlg:file{ id = "town", label = "spring_town.png", open = true, filetypes = { "png" },
+    filename = mapsDir() and app.fs.joinPath(mapsDir(), "spring_town.png") or "",
+    onchange = function()
+      local f = dlg.data.town
+      if f and f ~= "" then
+        prefs.mapsDir = app.fs.filePath(f)
+        sheetCache = {}
+        dlg:modify{ id = "status", text = shortPath(prefs.mapsDir) }
+      end
+    end }
+  dlg:label{ id = "status", text = mapsDir() and shortPath(mapsDir()) or "아직 지정 안 됨" }
+
+  endtabs()
   dlg:separator()
   dlg:button{ text = "닫기", onclick = function() dlg:close() end }
-  dlg:show{ wait = false, autoscrollbars = true }
+  dlg:show{ wait = false, autoscrollbars = true, bounds = env.bounds }
 end
 
 return U
