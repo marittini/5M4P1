@@ -25,8 +25,9 @@ local HELP = {
   "■ 추천 순서",
   "① 시작 탭에서 그릴 것을 고르고 '새 그림 만들기'",
   "② 색 탭에서 색을 누르고 연필(B)로 칸을 찍기",
-  "③ 다 그리면 다듬기 탭의 '자동으로 다듬기'",
-  "④ 미리보기 탭에서 스타듀 건물과 비교 → PNG로 저장",
+  "③ 재질 탭: 칠할 곳을 선택(M)하고 재질 버튼 → 바닐라 무늬로 채우기",
+  "④ 다 그리면 다듬기 탭의 '자동으로 다듬기'",
+  "⑤ 미리보기 탭에서 스타듀 건물과 비교 → PNG로 저장",
 }
 
 function U.open(env)
@@ -56,7 +57,7 @@ function U.open(env)
       if not quiet then
         app.alert{ title = "Stardew 도우미", text = {
           "스타듀 그림 폴더가 아직 지정되지 않았어요.",
-          "'⑤ 설정' 탭에서 Maps 폴더 안의 spring_town.png 를 골라 주세요.",
+          "'⑥ 설정' 탭에서 Maps 폴더 안의 spring_town.png 를 골라 주세요.",
           "(Content (unpacked)\\Maps 또는 Stardew Sim 의 web\\data\\img\\Maps)" } }
       end
       return nil
@@ -169,6 +170,38 @@ function U.open(env)
     app.transaction(title, function()
       result = fn(ctx, spr, cel)
       cel.image = img
+    end)
+    app.refresh()
+    return result
+  end
+
+  -- 그림 레이어를 캔버스 크기 이미지로 펼쳐서 작업 (빈 곳에도 칠할 수 있게)
+  local function withCanvasCel(title, fn)
+    local spr = app.activeSprite
+    if not spr then app.alert("먼저 그림을 열거나 '① 시작' 탭에서 새 그림을 만들어 주세요."); return end
+    if spr.colorMode ~= ColorMode.RGB then
+      app.alert{ title = "Stardew 도우미", text = { "이 그림은 RGB 모드가 아니라서 칠할 수 없어요.",
+        "위 메뉴 Sprite(스프라이트) > Color Mode(색상 모드) > RGB 로 바꾼 뒤 다시 눌러 주세요." } }
+      return
+    end
+    local layer = drawingLayer(spr)
+    if not layer then app.alert("그림 레이어가 없어요."); return end
+    if not layer.isEditable then app.alert("이 레이어는 잠겨 있어요. 레이어 이름 옆 자물쇠를 풀어 주세요."); return end
+    app.activeLayer = layer
+    local frame = app.activeFrame
+    local cel = layer:cel(frame)
+    local full = Image(spr.width, spr.height, ColorMode.RGB)
+    if cel then full:drawImage(cel.image, cel.position) end
+    local selection = spr.selection
+    local ctx = { img = full, pc = pc, ox = 0, oy = 0 }
+    if selection and not selection.isEmpty then
+      ctx.inSel = function(x, y) return selection:contains(x, y) end
+    end
+    local result
+    app.transaction(title, function()
+      result = fn(ctx, spr)
+      if cel then cel.image = full; cel.position = Point(0, 0)
+      else spr:newCel(layer, frame, full, Point(0, 0)) end
     end)
     app.refresh()
     return result
@@ -299,7 +332,7 @@ function U.open(env)
       "연필(B)이 1픽셀 크기로 준비돼 있어요. 바로 칸을 찍어 보세요.",
       "색은 '② 색' 탭에서 누르면 바뀌어요.",
       cols and "팔레트(왼쪽 색 목록)에 스타듀 바닐라 색을 넣어 뒀어요." or
-        "(스타듀 그림 폴더를 지정하면 바닐라 색이 팔레트에 들어가요 - ⑤ 설정 탭)" } }
+        "(스타듀 그림 폴더를 지정하면 바닐라 색이 팔레트에 들어가요 - ⑥ 설정 탭)" } }
   end }
   dlg:separator{ text = "이미 열린 그림에서 시작하기" }
   dlg:button{ text = "격자 + 연필 + 바닐라 색 준비", onclick = function()
@@ -360,11 +393,59 @@ function U.open(env)
     end }
   else
     dlg:label{ text = "아직 스타듀 그림 폴더가 지정되지 않았어요." }
-    dlg:label{ text = "'⑤ 설정' 탭에서 지정하면 여기에 바닐라 색이 나와요." }
+    dlg:label{ text = "'⑥ 설정' 탭에서 지정하면 여기에 바닐라 색이 나와요." }
   end
 
-  -- ③ 다듬기 --------------------------------------------------
-  tab("t_fix", "③ 다듬기")
+  -- ③ 재질 입히기 ----------------------------------------------
+  tab("t_tex", "③ 재질")
+  dlg:label{ text = "칠할 곳을 선택한 뒤 재질을 누르세요" }
+  dlg:label{ text = "(M: 사각형 선택, Q: 올가미 선택)" }
+  dlg:combobox{ id = "fillMode", option = "선택한 곳 전부", options = { "선택한 곳 전부", "이미 그린 부분만" } }
+  dlg:check{ id = "keepShade", text = "그린 명암 살리기 (밝게 칠한 곳은 밝게)", selected = false }
+  if loadSheet("spring_town", true) then
+    local count = 0
+    for _, m in ipairs(catalog) do
+      if m.tile then
+        if count > 0 and count % 3 == 0 then dlg:newrow() end
+        dlg:button{ text = m.short or m.name, onclick = function()
+          local img = loadSheet(m.sheet); if not img then return end
+          local t = m.tile
+          local crop = Image(img, Rectangle(t.x * 16, t.y * 16, t.w * 16, t.h * 16))
+          local tex = { w = crop.width, h = crop.height, get = function(x, y)
+            local v = crop:getPixel(x, y)
+            return pc.rgbaR(v), pc.rgbaG(v), pc.rgbaB(v), pc.rgbaA(v)
+          end }
+          local onlyPainted = dlg.data.fillMode == "이미 그린 부분만"
+          local spr = app.activeSprite
+          if spr and spr.selection.isEmpty and not onlyPainted then
+            app.alert{ title = "재질 입히기", text = { "먼저 칠할 곳을 선택해 주세요. (M: 사각형, Q: 올가미)",
+              "또는 '이미 그린 부분만'을 고르면 대충 칠해 둔 모양에 무늬를 입혀요." } }
+            return
+          end
+          local ramp = nil
+          if dlg.data.keepShade then
+            ramp = core.materialRamp(core.colorsInRect(crop, pc, 0, 0, crop.width, crop.height, 1), 6)
+          end
+          local n = withCanvasCel("재질 입히기: " .. (m.short or m.name), function(ctx, s)
+            local c = core.textureFill(ctx, tex, onlyPainted, ramp)
+            addImageColorsToPalette(s, ctx.img)
+            return c
+          end)
+          if n then app.tip((m.short or m.name) .. " 무늬로 " .. n .. "칸을 채웠어요 (되돌리기: Ctrl+Z)") end
+        end }
+        count = count + 1
+      end
+    end
+    dlg:newrow()
+    dlg:label{ text = "팁: 먼저 아무 색으로 모양을 대충 칠하고" }
+    dlg:newrow()
+    dlg:label{ text = "'이미 그린 부분만'으로 무늬를 입히면 편해요" }
+  else
+    dlg:label{ text = "'⑥ 설정' 탭에서 스타듀 그림 폴더를 먼저 지정해 주세요." }
+  end
+
+  -- ④ 다듬기 --------------------------------------------------
+  tab("t_fix", "④ 다듬기")
   dlg:label{ text = "다 그렸으면 눌러 보세요 (되돌리기: Ctrl+Z)" }
   dlg:check{ id = "sym", text = "좌우대칭 건물이에요", selected = false }
   dlg:button{ text = "자동으로 다듬기", onclick = function()
@@ -471,7 +552,7 @@ function U.open(env)
   end }
 
   -- ④ 게임에서 보기 ----------------------------------------------
-  tab("t_view", "④ 미리보기")
+  tab("t_view", "⑤ 미리보기")
   dlg:label{ text = "스타듀 살롱 옆에 같은 크기로 놓아 봐요" }
   dlg:button{ text = "스타듀 건물 옆에 놓고 보기", onclick = function()
     local spr = app.activeSprite
@@ -512,8 +593,8 @@ function U.open(env)
     app.alert{ title = "저장했어요", text = { path } }
   end }
 
-  -- ⑤ 설정 / 도움말 ----------------------------------------------
-  tab("t_set", "⑤ 설정")
+  -- ⑥ 설정 / 도움말 ----------------------------------------------
+  tab("t_set", "⑥ 설정")
   dlg:button{ text = "기본 조작법 보기", onclick = function() app.alert{ title = "기본 조작법", text = HELP } end }
   dlg:separator{ text = "스타듀 그림 폴더 (처음 한 번)" }
   dlg:label{ text = "Maps 폴더의 spring_town.png 선택" }
@@ -529,14 +610,14 @@ function U.open(env)
     end }
   dlg:label{ id = "status", text = "지금: " .. shortPath(mapsDir()) }
   dlg:separator{ text = "한글 글꼴" }
-  dlg:button{ text = "갈무리11 글꼴로 바꾸기", onclick = function()
-    local f11, f9 = fontPath("Galmuri11.ttf"), fontPath("Galmuri9.ttf")
-    if not app.fs.isFile(f11) then app.alert("글꼴 파일을 찾을 수 없어요: " .. f11); return end
+  dlg:button{ text = "갈무리9 글꼴로 바꾸기", onclick = function()
+    local f9 = fontPath("Galmuri9.ttf")
+    if not app.fs.isFile(f9) then app.alert("글꼴 파일을 찾을 수 없어요: " .. f9); return end
     local ok = pcall(function()
-      app.preferences.theme.font = "file=" .. f11 .. ",size=12"
-      app.preferences.theme.mini_font = "file=" .. (app.fs.isFile(f9) and f9 or f11) .. ",size=10"
+      app.preferences.theme.font = "file=" .. f9 .. ",size=10"
+      app.preferences.theme.mini_font = "file=" .. f9 .. ",size=10"
     end)
-    app.alert{ title = "글꼴", text = ok and { "갈무리11 글꼴로 설정했어요.", "Aseprite를 껐다 켜면 적용돼요." }
+    app.alert{ title = "글꼴", text = ok and { "갈무리9 글꼴로 설정했어요.", "Aseprite를 껐다 켜면 적용돼요." }
       or { "이 버전의 Aseprite에서는 글꼴을 바꿀 수 없어요." } }
   end }
   dlg:button{ text = "원래 글꼴로", onclick = function()
@@ -556,11 +637,12 @@ function U.open(env)
       "탭을 왼쪽부터 순서대로 쓰면 돼요.",
       "① 시작: 그릴 것 고르고 새 그림 만들기",
       "② 색: 스타듀 바닐라 색을 눌러서 칠하기",
-      "③ 다듬기: 까만 테두리, 튀어나온 점, 좌우대칭 자동 정리",
-      "④ 미리보기: 스타듀 건물 옆에 놓고 비교, PNG 저장",
+      "③ 재질: 고른 곳을 바닐라 벽돌·지붕·판자 무늬로 채우기",
+      "④ 다듬기: 까만 테두리, 튀어나온 점, 좌우대칭 자동 정리",
+      "⑤ 미리보기: 스타듀 건물 옆에 놓고 비교, PNG 저장",
       "",
-      "처음이라면 '⑤ 설정' 탭에서",
-      "스타듀 그림 폴더 지정 + 갈무리11 글꼴 + 기본 조작법부터 보세요." } }
+      "처음이라면 '⑥ 설정' 탭에서",
+      "스타듀 그림 폴더 지정 + 갈무리9 글꼴 + 기본 조작법부터 보세요." } }
   end
 end
 

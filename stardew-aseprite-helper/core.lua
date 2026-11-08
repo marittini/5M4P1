@@ -354,6 +354,65 @@ function M.brick(ctx, ramp, courseH, brickW)
   return cnt
 end
 
+-- ---------------------------------------------------------------- 5-2) 재질 무늬 채우기
+-- tex = { w=, h=, get=function(x, y) return r, g, b, a end }  (바닐라 타일, 캔버스 (0,0)에 맞춰 반복)
+-- onlyPainted: true면 이미 그린(불투명) 칸에만, false면 선택 영역 전부
+-- ramp: 명암 살리기용 재질 램프 (없으면 명암 살리기 안 함)
+function M.textureFill(ctx, tex, onlyPainted, ramp)
+  local img, pc = ctx.img, ctx.pc
+  local ox, oy = ctx.ox or 0, ctx.oy or 0
+  local W, H = img.width, img.height
+  local labs, med
+  if ramp and #ramp > 1 then
+    labs = {}
+    for i, c in ipairs(ramp) do local L, a, b = M.lab(c.r, c.g, c.b); labs[i] = { L, a, b } end
+    local ls = {}
+    for y = 0, H - 1 do
+      for x = 0, W - 1 do
+        if sel(ctx, x, y) then
+          local r, g, b, a = rgba(ctx, x, y)
+          if a > 0 then ls[#ls + 1] = M.luma(r, g, b) end
+        end
+      end
+    end
+    if #ls > 0 then table.sort(ls); med = ls[math.floor(#ls / 2) + 1] else labs = nil end
+  end
+  local function nearestIdx(r, g, b)
+    local L, A, B = M.lab(r, g, b)
+    local bi, bd = 1, math.huge
+    for i, l in ipairs(labs) do
+      local d = (L - l[1]) ^ 2 + (A - l[2]) ^ 2 + (B - l[3]) ^ 2
+      if d < bd then bd, bi = d, i end
+    end
+    return bi
+  end
+  local changes = {}
+  for y = 0, H - 1 do
+    for x = 0, W - 1 do
+      if sel(ctx, x, y) then
+        local r0, g0, b0, a0 = rgba(ctx, x, y)
+        if (not onlyPainted) or a0 > 0 then
+          local tx, ty = (x + ox) % tex.w, (y + oy) % tex.h
+          local r, g, b, a = tex.get(tx, ty)
+          if a > 0 then
+            if labs and a0 > 0 then
+              local d = math.floor((M.luma(r0, g0, b0) - med) * 8 + 0.5)
+              d = math.max(-2, math.min(2, d))
+              if d ~= 0 then
+                local k = math.max(1, math.min(#ramp, nearestIdx(r, g, b) + d))
+                r, g, b = ramp[k].r, ramp[k].g, ramp[k].b
+              end
+            end
+            changes[#changes + 1] = { x, y, pc.rgba(r, g, b, 255) }
+          end
+        end
+      end
+    end
+  end
+  for _, c in ipairs(changes) do img:drawPixel(c[1], c[2], c[3]) end
+  return #changes
+end
+
 -- ---------------------------------------------------------------- 6) 검사
 -- 결과: { colors=고유색 수, offPalette=, black=, stray=, asym= , marks={ {x,y,kind}... } }
 function M.check(ctx, palette, axis2)
