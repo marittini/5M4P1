@@ -2,7 +2,7 @@
   "name": "stardew-pixel-helper",
   "displayName": "Stardew 도트 도우미",
   "description": "바닐라 스타듀밸리 재질/팔레트 참고, 검사, 보정 도구",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": { "name": "me" },
   "publisher": "me",
   "license": "MIT",

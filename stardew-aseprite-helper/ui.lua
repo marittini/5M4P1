@@ -401,45 +401,84 @@ function U.open(env)
   dlg:label{ text = "칠할 곳을 선택한 뒤 재질을 누르세요" }
   dlg:label{ text = "(M: 사각형 선택, Q: 올가미 선택)" }
   dlg:combobox{ id = "fillMode", option = "선택한 곳 전부", options = { "선택한 곳 전부", "이미 그린 부분만" } }
-  dlg:check{ id = "keepShade", text = "그린 명암 살리기 (밝게 칠한 곳은 밝게)", selected = false }
   if loadSheet("spring_town", true) then
-    local count = 0
-    for _, m in ipairs(catalog) do
-      if m.tile then
-        if count > 0 and count % 3 == 0 then dlg:newrow() end
-        dlg:button{ text = m.short or m.name, onclick = function()
-          local img = loadSheet(m.sheet); if not img then return end
-          local t = m.tile
-          local crop = Image(img, Rectangle(t.x * 16, t.y * 16, t.w * 16, t.h * 16))
-          local tex = { w = crop.width, h = crop.height, get = function(x, y)
-            local v = crop:getPixel(x, y)
-            return pc.rgbaR(v), pc.rgbaG(v), pc.rgbaB(v), pc.rgbaA(v)
-          end }
-          local onlyPainted = dlg.data.fillMode == "이미 그린 부분만"
-          local spr = app.activeSprite
-          if spr and spr.selection.isEmpty and not onlyPainted then
-            app.alert{ title = "재질 입히기", text = { "먼저 칠할 곳을 선택해 주세요. (M: 사각형, Q: 올가미)",
-              "또는 '이미 그린 부분만'을 고르면 대충 칠해 둔 모양에 무늬를 입혀요." } }
-            return
-          end
-          local ramp = nil
-          if dlg.data.keepShade then
-            ramp = core.materialRamp(core.colorsInRect(crop, pc, 0, 0, crop.width, crop.height, 1), 6)
-          end
-          local n = withCanvasCel("재질 입히기: " .. (m.short or m.name), function(ctx, s)
-            local c = core.textureFill(ctx, tex, onlyPainted, ramp)
-            addImageColorsToPalette(s, ctx.img)
-            return c
-          end)
-          if n then app.tip((m.short or m.name) .. " 무늬로 " .. n .. "칸을 채웠어요 (되돌리기: Ctrl+Z)") end
-        end }
-        count = count + 1
+    local function texOf(sh, px, hue)
+      local img = loadSheet(sh); if not img then return nil end
+      local crop = Image(img, Rectangle(px[1], px[2], px[3], px[4]))
+      return { w = crop.width, h = crop.height, crop = crop, get = function(x, y)
+        local v = crop:getPixel(x, y)
+        local r, g, b, a = pc.rgbaR(v), pc.rgbaG(v), pc.rgbaB(v), pc.rgbaA(v)
+        if hue then r, g, b = core.hueShift(r, g, b, hue) end
+        return r, g, b, a
+      end }
+    end
+    local function checkSel()
+      local onlyPainted = dlg.data.fillMode == "이미 그린 부분만"
+      local spr = app.activeSprite
+      if spr and spr.selection.isEmpty and not onlyPainted then
+        app.alert{ title = "재질 입히기", text = { "먼저 칠할 곳을 선택해 주세요. (M: 사각형, Q: 올가미)",
+          "또는 '이미 그린 부분만'을 고르면 대충 칠해 둔 모양에 무늬를 입혀요." } }
+        return nil
       end
+      return true, onlyPainted
+    end
+    dlg:separator{ text = "벽 · 바닥" }
+    dlg:check{ id = "keepShade", text = "그린 명암 살리기 (밝게 칠한 곳은 밝게)", selected = false }
+    for i, m in ipairs(catalog.fills or {}) do
+      if i > 1 and (i - 1) % 4 == 0 then dlg:newrow() end
+      dlg:button{ text = m.name, onclick = function()
+        local ok, onlyPainted = checkSel(); if not ok then return end
+        local tex = texOf(m.sheet, m.px, m.hue); if not tex then return end
+        local ramp = nil
+        if dlg.data.keepShade then
+          local cols = {}
+          for y = 0, tex.h - 1 do for x = 0, tex.w - 1 do
+            local r, g, b = tex.get(x, y)
+            local k = core.key(r, g, b)
+            if not cols[k] then cols[k] = { r = r, g = g, b = b, k = k, count = 0 } end
+            cols[k].count = cols[k].count + 1
+          end end
+          local list = {}; for _, c in pairs(cols) do list[#list + 1] = c end
+          ramp = core.materialRamp(list, 6)
+        end
+        local n = withCanvasCel("재질 입히기: " .. m.name, function(ctx, s)
+          local c = core.textureFill(ctx, tex, onlyPainted, ramp)
+          addImageColorsToPalette(s, ctx.img)
+          return c
+        end)
+        if n then app.tip(m.name .. " (" .. (m.from or "") .. ") 무늬로 " .. n .. "칸 (되돌리기: Ctrl+Z)") end
+      end }
+    end
+    dlg:separator{ text = "지붕 (가운데 기준 왼쪽 그늘 면 / 오른쪽 밝은 면)" }
+    dlg:check{ id = "roofEdges", text = "용마루(가운데 줄)와 처마(아래 테두리) 그리기", selected = true }
+    for i, m in ipairs(catalog.roofs or {}) do
+      dlg:button{ text = m.name, onclick = function()
+        local ok, onlyPainted = checkSel(); if not ok then return end
+        local L, R = texOf(m.sheet, m.left), texOf(m.sheet, m.right); if not L or not R then return end
+        local n = withCanvasCel("지붕: " .. m.name, function(ctx, s)
+          -- 가운데 = 선택 영역(없으면 그린 부분) 가로 가운데
+          local x0, x1
+          if not s.selection.isEmpty then
+            x0, x1 = s.selection.bounds.x, s.selection.bounds.x + s.selection.bounds.width
+          else
+            for y = 0, ctx.img.height - 1 do for x = 0, ctx.img.width - 1 do
+              if pc.rgbaA(ctx.img:getPixel(x, y)) > 0 then
+                x0 = (x0 and math.min(x0, x)) or x; x1 = (x1 and math.max(x1, x + 1)) or x + 1
+              end
+            end end
+          end
+          if not x0 then return 0 end
+          local c = core.roofFill(ctx, L, R, x0 + x1, onlyPainted, dlg.data.roofEdges)
+          addImageColorsToPalette(s, ctx.img)
+          return c
+        end)
+        if n then app.tip(m.name .. " 지붕으로 " .. n .. "칸 (되돌리기: Ctrl+Z)") end
+      end }
     end
     dlg:newrow()
-    dlg:label{ text = "팁: 먼저 아무 색으로 모양을 대충 칠하고" }
+    dlg:label{ text = "팁: 아무 색으로 집 모양을 대충 칠하고" }
     dlg:newrow()
-    dlg:label{ text = "'이미 그린 부분만'으로 무늬를 입히면 편해요" }
+    dlg:label{ text = "벽 부분, 지붕 부분을 각각 선택해서 누르면 편해요" }
   else
     dlg:label{ text = "'⑥ 설정' 탭에서 스타듀 그림 폴더를 먼저 지정해 주세요." }
   end

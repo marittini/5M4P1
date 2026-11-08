@@ -23,6 +23,12 @@ function M.lab(r, g, b)
   return 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)
 end
 
+function M.hueShift(r, g, b, deg)
+  local h, s_, l = M.rgbToHsl(r, g, b)
+  if s_ < 0.08 then return r, g, b end
+  return M.hslToRgb((h + deg / 360) % 1, s_, l)
+end
+
 function M.luma(r, g, b) return (0.299 * r + 0.587 * g + 0.114 * b) / 255 end
 
 local function key(r, g, b) return r * 65536 + g * 256 + b end
@@ -405,6 +411,64 @@ function M.textureFill(ctx, tex, onlyPainted, ramp)
             end
             changes[#changes + 1] = { x, y, pc.rgba(r, g, b, 255) }
           end
+        end
+      end
+    end
+  end
+  for _, c in ipairs(changes) do img:drawPixel(c[1], c[2], c[3]) end
+  return #changes
+end
+
+-- ---------------------------------------------------------------- 5-3) 지붕 채우기
+-- 선택(또는 그린) 영역을 가운데 세로선 기준으로 왼쪽은 left 무늬, 오른쪽은 right 무늬로 채움
+-- edges: 가운데 용마루(밝은 줄 + 양옆 진한 줄)와 맨 아래 처마(진한 줄 2칸)를 그림
+function M.roofFill(ctx, left, right, centerX2, onlyPainted, edges)
+  local img, pc = ctx.img, ctx.pc
+  local ox, oy = ctx.ox or 0, ctx.oy or 0
+  local W, H = img.width, img.height
+  -- 가장 어두운 색(처마/용마루 테두리)과 꽤 밝은 색(용마루, 너무 하얗지 않게 75% 밝기)
+  local function dark(tex)
+    local cols = {}
+    for y = 0, tex.h - 1 do for x = 0, tex.w - 1 do
+      local r, g, b, a = tex.get(x, y)
+      if a > 0 then cols[#cols + 1] = { r, g, b, M.luma(r, g, b) } end
+    end end
+    table.sort(cols, function(p, q) return p[4] < q[4] end)
+    local lit = cols[math.max(1, math.floor(#cols * 0.75))]
+    return { cols[1][1], cols[1][2], cols[1][3] }, { lit[1], lit[2], lit[3] }
+  end
+  local ldark, llit = dark(left)
+  local rdark, rlit = dark(right)
+  local target = {}
+  for y = 0, H - 1 do
+    for x = 0, W - 1 do
+      if sel(ctx, x, y) then
+        local _, _, _, a0 = rgba(ctx, x, y)
+        if (not onlyPainted) or a0 > 0 then target[y * W + x] = true end
+      end
+    end
+  end
+  local changes = {}
+  local function put(x, y, c) changes[#changes + 1] = { x, y, pc.rgba(c[1], c[2], c[3], 255) } end
+  for y = 0, H - 1 do
+    for x = 0, W - 1 do
+      if target[y * W + x] then
+        local cx2 = (x + ox) * 2 + 1
+        local tex = cx2 < centerX2 and left or right
+        local r, g, b, a = tex.get((x + ox) % tex.w, (y + oy) % tex.h)
+        if a > 0 then
+          local c = { r, g, b }
+          if edges then
+            local d = math.abs(cx2 - centerX2)
+            if d <= 1 then c = rlit
+            elseif d <= 3 then c = (cx2 < centerX2) and ldark or rdark end
+            -- 처마: 이 칸 아래가 채우는 영역이 아니면 맨 아래 줄
+            local below1 = target[(y + 1) * W + x]
+            local below2 = target[(y + 2) * W + x]
+            if y + 1 >= H or not below1 then c = (cx2 < centerX2) and ldark or rdark
+            elseif y + 2 >= H or not below2 then c = (cx2 < centerX2) and ldark or rdark end
+          end
+          put(x, y, c)
         end
       end
     end
