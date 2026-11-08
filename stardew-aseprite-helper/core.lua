@@ -69,7 +69,7 @@ function M.colorsInRect(img, pc, x0, y0, w, h, minCount)
     for x = x0, x0 + w - 1 do
       if x >= 0 and y >= 0 and x < img.width and y < img.height then
         local v = img:getPixel(x, y)
-        if pc.rgbaA(v) == 255 then
+        if pc.rgbaA(v) >= 200 then  -- 일부 추출본은 불투명도가 253
           local r, g, b = pc.rgbaR(v), pc.rgbaG(v), pc.rgbaB(v)
           local k = key(r, g, b)
           if not counts[k] then counts[k] = 0; cols[#cols + 1] = { r = r, g = g, b = b, k = k } end
@@ -102,6 +102,42 @@ function M.ramp(colors, n)
     out[#out + 1] = best
   end
   return out
+end
+
+-- 재질의 주된 색 계열만 골라 n단계 램프로 (덩굴·다른 물건 색 제외)
+-- 가장 많이 쓰인 색들의 색상(hue)과 가까운 색, 또는 아주 어둡거나 무채색인 색(외곽선/그늘)만 남김
+function M.materialRamp(colors, n)
+  n = n or 5
+  local total = 0
+  for _, c in ipairs(colors) do total = total + c.count end
+  if total == 0 then return {} end
+  local byCount = {}
+  for _, c in ipairs(colors) do byCount[#byCount + 1] = c end
+  table.sort(byCount, function(a, b) return a.count > b.count end)
+  -- 주된 색상: 채도 있는 색 중 가장 많이 쓰인 색들의 가중 평균 색상(원형 평균)
+  local sx, sy, w = 0, 0, 0
+  for i = 1, math.min(4, #byCount) do
+    local c = byCount[i]
+    local h, s, l = M.rgbToHsl(c.r, c.g, c.b)
+    if s > 0.12 and l > 0.12 and l < 0.92 then
+      sx = sx + math.cos(h * 2 * math.pi) * c.count
+      sy = sy + math.sin(h * 2 * math.pi) * c.count
+      w = w + c.count
+    end
+  end
+  local domH = w > 0 and (math.atan(sy, sx) / (2 * math.pi)) % 1 or nil
+  local keep = {}
+  for _, c in ipairs(byCount) do
+    local h, s, l = M.rgbToHsl(c.r, c.g, c.b)
+    local d = domH and math.abs(h - domH) or 0
+    if d > 0.5 then d = 1 - d end
+    local ok = (not domH) or d <= 0.09 or s < 0.12 or l < 0.16
+    if ok and c.count >= total * 0.01 then keep[#keep + 1] = c end
+  end
+  if #keep == 0 then keep = byCount end
+  while #keep > n * 2 do table.remove(keep) end -- 많이 쓰인 색 우선
+  table.sort(keep, function(a, b) return M.luma(a.r, a.g, a.b) < M.luma(b.r, b.g, b.b) end)
+  return M.ramp(keep, n)
 end
 
 -- ---------------------------------------------------------------- 픽셀 접근 도우미

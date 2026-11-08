@@ -11,6 +11,13 @@ function init(plugin)
     group = "sdv_helper_menu",
     onclick = open,
   }
+  -- 찾기 쉽도록 도움말(Help) 메뉴 맨 위에도 하나 더
+  plugin:newCommand{
+    id = "SdvHelperOpenHelp",
+    title = "Stardew 도트 도우미 열기",
+    group = "help_readme",
+    onclick = open,
+  }
 end
 
 function exit(plugin) end
